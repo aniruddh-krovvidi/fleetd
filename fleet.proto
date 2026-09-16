@@ -1,0 +1,102 @@
+syntax = "proto3";
+package fleet;
+
+// Fleet is the control plane for a fleet of AI accelerator boards.
+// Boards run an agent that Registers, Heartbeats, and ReportsJobs.
+// Clients submit inference jobs (evals / sims / rollouts) and query state.
+service Fleet {
+  // board-side
+  rpc Register(BoardInfo) returns (RegisterReply);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatReply);
+  rpc ReportJob(JobResult) returns (Ack);
+  // client-side
+  rpc SubmitJob(JobSpec) returns (JobHandle);
+  rpc GetJob(JobHandle) returns (JobStatus);
+  rpc ListJobs(Empty) returns (JobList);
+  rpc ListBoards(Empty) returns (BoardList);
+  rpc DrainBoard(BoardId) returns (Ack);
+  rpc FleetStats(Empty) returns (Stats);
+}
+
+message Empty {}
+message Ack { bool ok = 1; string msg = 2; }
+message BoardId { string id = 1; }
+
+message BoardInfo {
+  string id = 1;
+  string hw_gen = 2;      // e.g. "ai5", "ai6"
+  string firmware = 3;
+  int32 slots = 4;        // concurrent jobs the board can run
+}
+message RegisterReply { bool accepted = 1; string target_firmware = 2; }
+
+message HeartbeatRequest {
+  string board_id = 1;
+  string state = 2;       // agent-reported: READY | BUSY | FLASHING
+  float temp_c = 3;
+  string firmware = 4;
+  repeated string running_jobs = 5;
+}
+// Commands the controller pushes to a board on its next heartbeat.
+message Command {
+  string type = 1;        // ASSIGN | FLASH | REBOOT | DRAIN
+  JobSpec job = 2;
+  string firmware = 3;
+}
+message HeartbeatReply { repeated Command commands = 1; }
+
+message JobSpec {
+  string id = 1;
+  string kind = 2;        // eval | sim | rollout
+  string artifact = 3;    // compiler-produced artifact hash / path
+  string hw_gen = 4;      // required hardware generation ("" = any)
+  int32 priority = 5;     // higher first
+  int32 work_units = 6;   // synthetic work size
+}
+message JobHandle { string id = 1; }
+message JobResult {
+  string job_id = 1;
+  string board_id = 2;
+  bool success = 3;
+  string error = 4;
+  float duration_s = 5;
+}
+message JobStatus {
+  string id = 1;
+  string kind = 2;
+  string state = 3;       // QUEUED | RUNNING | DONE | FAILED
+  string board_id = 4;
+  int32 attempts = 5;
+  float queued_s = 6;     // time from submit to first start
+  float duration_s = 7;
+  string error = 8;
+}
+message JobList { repeated JobStatus jobs = 1; }
+
+message Board {
+  string id = 1;
+  string hw_gen = 2;
+  string firmware = 3;
+  string state = 4;       // PROVISIONING | HEALTHY | THROTTLED | UNHEALTHY | DRAINING
+  float temp_c = 5;
+  repeated string running_jobs = 6;
+  float last_seen_ago_s = 7;
+  int32 slots = 8;
+}
+message BoardList { repeated Board boards = 1; }
+
+message Stats {
+  int32 boards_total = 1;
+  int32 boards_healthy = 2;
+  float uptime_pct = 3;        // time-weighted % of boards healthy
+  float utilization_pct = 4;   // time-weighted % of slots busy
+  int32 jobs_queued = 5;
+  int32 jobs_running = 6;
+  int32 jobs_done = 7;
+  int32 jobs_failed = 8;
+  float mttr_s = 9;            // mean time to recover an unhealthy board
+  int32 heals = 10;            // boards auto-recovered
+  int32 requeues = 11;         // jobs rescued from dead boards
+  float p50_queue_s = 12;
+  float p99_queue_s = 13;
+}
